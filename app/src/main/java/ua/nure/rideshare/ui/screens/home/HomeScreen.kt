@@ -113,6 +113,7 @@ fun HomeScreen(
         // Load map style
     val mapStyleOptions = remember {
         try {
+
             MapStyleOptions.loadRawResourceStyle(context, R.raw.map_style)
         } catch (e: Exception) {
             null // Return null if style fails to load

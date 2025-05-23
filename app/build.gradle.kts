@@ -61,7 +61,9 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
-    implementation("com.google.android.gms:play-services-location:21.3.0")
+
+
+
 
     val room_version = "2.5.2"
     implementation ("androidx.room:room-runtime:$room_version")
@@ -91,6 +93,8 @@ dependencies {
     // Google Maps for Compose
     implementation("com.google.maps.android:maps-compose:4.3.0")
     implementation("com.google.android.gms:play-services-maps:18.1.0")
+    implementation("com.google.android.libraries.places:places:3.2.0")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 
     // Coil for image loading
     implementation("io.coil-kt:coil-compose:2.4.0")

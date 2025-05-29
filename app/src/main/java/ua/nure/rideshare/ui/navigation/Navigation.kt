@@ -1,6 +1,7 @@
 package ua.nure.rideshare.ui.navigation
 
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -81,9 +82,9 @@ sealed class Screen(val route: String) {
     /**
      * Ride creation screen for drivers
      */
-    object CreateRide : Screen("create_ride") {
-        fun createRoute(): String {
-            return "create_ride"
+    object CreateRide : Screen("create_ride?carId={carId}") {
+        fun createRoute(carId: String? = null): String {
+            return if (carId != null) "create_ride?carId=$carId" else "create_ride"
         }
     }
 
@@ -122,6 +123,7 @@ fun RideShareNavHost(
 ) {
     val authViewModel: AuthViewModel = hiltViewModel()
     var currentUserId by remember { mutableStateOf<String?>(null) }
+    var selectedCarIdForRide by remember { mutableStateOf<String?>(null) }
 
     // Collect the current user ID from authViewModel
     LaunchedEffect(authViewModel) {
@@ -249,13 +251,28 @@ fun RideShareNavHost(
             }
         }
 
-        composable(Screen.CreateRide.route) {
+        composable(
+            route = Screen.CreateRide.route, // "create_ride?carId={carId}"
+            arguments = listOf(
+                navArgument("carId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
             currentUserId?.let { userId ->
+                val carId = backStackEntry.arguments?.getString("carId")
+
+                // Add logging to debug
+                Log.d("NAVIGATION", "CreateRide - Received carId: $carId")
+
                 RideCreationScreen(
+                    userId = userId,
                     locationViewModel = locationViewModel,
+                    selectedCarId = carId,
                     onBackClick = { navController.popBackStack() },
                     onConfirmTrip = { startLocation, endLocation, date, time, vehicle ->
-                        // After creating a ride, navigate back to home
                         navController.navigate(Screen.Home.route) {
                             popUpTo(Screen.CreateRide.route) { inclusive = true }
                         }
@@ -302,21 +319,53 @@ fun RideShareNavHost(
                     onNavigateBack = { navController.popBackStack() },
                     onAddNewCar = { navController.navigate(Screen.AddCar.route) },
                     onSelectCar = { carId ->
-                        // When a car is selected for a ride, navigate to create ride
-                        navController.navigate(Screen.CreateRide.route) {
-                            // You might want to pass the carId to CreateRide screen
-                            // For now, this is simplified
-                            popUpTo(Screen.UserCars.route) { inclusive = true }
+                        // Store the selected car ID
+                        selectedCarIdForRide = carId
+
+                        Log.d("NAVIGATION", "UserCars - Selected carId: $carId")
+
+                        // Navigate to create ride with the car ID
+                        navController.navigate(Screen.CreateRide.createRoute(carId)) {
+                            // Don't pop the UserCars screen, so user can go back
+                            // popUpTo(Screen.UserCars.route) { inclusive = true }
                         }
                     }
                 )
             } ?: run {
-                // If userId is null, navigate back to login
                 LaunchedEffect(Unit) {
                     navController.navigate(Screen.Login.route) {
                         popUpTo(navController.graph.id) { inclusive = true }
                     }
                 }
+            }
+        }
+
+        // Update the CreateRide screen definition to accept carId parameter
+// Update the CreateRide composable to receive the carId
+        composable(
+            route = Screen.CreateRide.route,
+            arguments = listOf(
+                navArgument("carId") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            )
+        ) { backStackEntry ->
+            currentUserId?.let { userId ->
+                val carId = backStackEntry.arguments?.getString("carId")
+
+                RideCreationScreen(
+                    userId = userId,
+                    locationViewModel = locationViewModel,
+                    selectedCarId = carId, // Pass the car ID here
+                    onBackClick = { navController.popBackStack() },
+                    onConfirmTrip = { startLocation, endLocation, date, time, vehicle ->
+                        navController.navigate(Screen.Home.route) {
+                            popUpTo(Screen.CreateRide.route) { inclusive = true }
+                        }
+                    }
+                )
             }
         }
 

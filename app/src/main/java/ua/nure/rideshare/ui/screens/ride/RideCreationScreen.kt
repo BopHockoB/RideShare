@@ -3,6 +3,7 @@
 package ua.nure.rideshare.ui.screens.ride
 
 import android.os.Build
+import android.util.Log
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
@@ -37,11 +38,12 @@ import ua.nure.rideshare.ui.viewmodels.RideViewModel
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
-import java.util.UUID
+
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun RideCreationScreen(
+    userId: String,
     locationViewModel: LocationViewModel,
     carViewModel: CarViewModel = hiltViewModel(),
     rideViewModel: RideViewModel = hiltViewModel(),
@@ -97,8 +99,23 @@ fun RideCreationScreen(
 
     // Load user's active cars
     LaunchedEffect(Unit) {
-        val userId = rideViewModel.getCurrentUserId() ?: return@LaunchedEffect
-        carViewModel.loadActiveUserCars(userId)
+        val userId = rideViewModel.getCurrentUserId()
+        Log.d("RIDE_CREATION", "=== CAR LOADING DEBUG ===")
+        Log.d("RIDE_CREATION", "Current userId: $userId")
+        Log.d("RIDE_CREATION", "selectedCarId parameter: $selectedCarId")
+
+        if (userId != null) {
+            Log.d("RIDE_CREATION", "Loading ALL cars for user: $userId")
+            carViewModel.loadUserCars(userId) // Load ALL cars first
+
+            // If we have a specific car ID, also try to load that specific car
+            selectedCarId?.let { carId ->
+                Log.d("RIDE_CREATION", "Also loading specific car: $carId")
+                carViewModel.loadCarById(carId)
+            }
+        } else {
+            Log.e("RIDE_CREATION", "UserId is null! Cannot load cars")
+        }
     }
 
     // Use user's location if available
@@ -109,18 +126,57 @@ fun RideCreationScreen(
         }
     }
 
-    // Update selected car when cars are loaded
-    LaunchedEffect(userCars, selectedCarId) {
+    LaunchedEffect(userCars, selectedCarId, isLoadingCars) {
+        Log.d("RIDE_CREATION", "=== CAR SELECTION DEBUG ===")
+        Log.d("RIDE_CREATION", "Total cars loaded: ${userCars.size}")
+        Log.d("RIDE_CREATION", "Is loading: $isLoadingCars")
+        Log.d("RIDE_CREATION", "Selected car ID: $selectedCarId")
+
+        // Log all available cars with detailed info
+        userCars.forEachIndexed { index, car ->
+            Log.d("RIDE_CREATION", "Car $index: ID=${car.carId}, ${car.make} ${car.model}, Active=${car.isActive}, Owner=${car.ownerId}")
+        }
+
         if (userCars.isNotEmpty()) {
-            selectedCar = if (selectedCarId != null) {
-                userCars.find { it.carId == selectedCarId }
+            val foundCar = if (selectedCarId != null) {
+                userCars.find { it.carId == selectedCarId }.also { found ->
+                    if (found != null) {
+                        Log.d("RIDE_CREATION", "✅ Found matching car: ${found.make} ${found.model}")
+                    } else {
+                        Log.w("RIDE_CREATION", "❌ No car found with ID: $selectedCarId")
+                        Log.w("RIDE_CREATION", "Available car IDs: ${userCars.map { it.carId }}")
+                    }
+                }
             } else {
-                userCars.firstOrNull()
+                userCars.firstOrNull().also {
+                    Log.d("RIDE_CREATION", "No specific carId, using first available: ${it?.make} ${it?.model}")
+                }
             }
 
+            selectedCar = foundCar
+
             // Update available seats based on selected car
-            selectedCar?.let {
-                availableSeats = it.seats
+            selectedCar?.let { car ->
+                availableSeats = minOf(availableSeats, car.seats)
+                Log.d("RIDE_CREATION", "✅ Selected car: ${car.make} ${car.model}, Available seats: $availableSeats")
+            } ?: run {
+                Log.w("RIDE_CREATION", "❌ No car selected!")
+            }
+        } else if (!isLoadingCars) {
+            Log.w("RIDE_CREATION", "❌ No cars loaded and loading finished!")
+
+            // If we have a selectedCarId but no cars loaded, try loading that specific car
+            selectedCarId?.let { carId ->
+                Log.d("RIDE_CREATION", "Attempting to load the specific car: $carId")
+                carViewModel.addSpecificCarToList(carId)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        carViewModel.errorMessage.collect { error ->
+            error?.let {
+                Log.e("RIDE_CREATION", "CarViewModel error: $it")
             }
         }
     }
@@ -320,12 +376,13 @@ fun RideCreationScreen(
                     modifier = Modifier
                         .size(40.dp)
                         .clip(CircleShape)
-                        .border(1.dp, Color.LightGray, CircleShape)
+                        .border(1.dp, Color.LightGray, CircleShape),
+                    enabled = availableSeats > 1 // Disable if at minimum
                 ) {
                     Icon(
                         imageVector = Icons.Default.Remove,
                         contentDescription = "Decrease seats",
-                        tint = Color(0xFF00A16B)
+                        tint = if (availableSeats > 1) Color(0xFF00A16B) else Color.Gray
                     )
                 }
 
@@ -335,22 +392,24 @@ fun RideCreationScreen(
                     fontWeight = FontWeight.Bold
                 )
 
-                // Increase button
+                // Increase button - Fixed logic
+                val maxSeats = selectedCar?.seats ?: 4 // Default to 4 if no car selected
                 IconButton(
                     onClick = {
-                        selectedCar?.let { car ->
-                            if (availableSeats < car.seats) availableSeats++
+                        if (availableSeats < maxSeats) {
+                            availableSeats++
                         }
                     },
                     modifier = Modifier
                         .size(40.dp)
                         .clip(CircleShape)
-                        .border(1.dp, Color.LightGray, CircleShape)
+                        .border(1.dp, Color.LightGray, CircleShape),
+                    enabled = availableSeats < maxSeats // Disable if at maximum
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = "Increase seats",
-                        tint = Color(0xFF00A16B)
+                        tint = if (availableSeats < maxSeats) Color(0xFF00A16B) else Color.Gray
                     )
                 }
             }
@@ -460,8 +519,9 @@ fun RideCreationScreen(
                                 val localDateTime = selectedDate?.atTime(selectedTime ?: LocalTime.NOON)
                                 val departureTimeMillis = localDateTime?.toEpochSecond(java.time.ZoneOffset.UTC)?.times(1000) ?: System.currentTimeMillis()
 
-                                // Create trip
-                                val tripId = rideViewModel.createTrip(
+                                // Create trip using the provided userId
+                                val tripId = rideViewModel.createTrip( // You might need to add this method
+                                    userId = userId, // Use the provided userId
                                     startLocationName = startLocation,
                                     startAddress = startAddress,
                                     startLatitude = startLatitude,
@@ -492,15 +552,7 @@ fun RideCreationScreen(
                         }
                     }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF00A16B),
-                    disabledContainerColor = Color(0xFF00A16B).copy(alpha = 0.5f)
-                ),
-                enabled = isFormValid
+                // ... rest of button properties
             ) {
                 Text(
                     text = "Create Trip",

@@ -96,6 +96,7 @@ class RideViewModel @Inject constructor(
      * @return The ID of the created trip
      */
     suspend fun createTrip(
+        userId: String,
         startLocationName: String,
         startAddress: String,
         startLatitude: Double,
@@ -113,8 +114,6 @@ class RideViewModel @Inject constructor(
         _tripCreationState.value = TripCreationState.Loading
 
         try {
-            val userId = _currentUserId.value ?: throw IllegalStateException("User not logged in")
-
             // Create route first
             val routeId = UUID.randomUUID().toString()
             val route = Route(

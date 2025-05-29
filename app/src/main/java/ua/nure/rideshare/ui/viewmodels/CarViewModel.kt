@@ -90,7 +90,7 @@ class CarViewModel @Inject constructor(
         Log.d("CAR_VIEWMODEL", "loadCarById called with carId: $carId")
         viewModelScope.launch {
             try {
-                carRepository.getCarById(carId).collect { car ->
+                carRepository.getCarById(carId).take(1).collect { car ->
                     if (car != null) {
                         Log.d("CAR_VIEWMODEL", "Found car: ${car.make} ${car.model} - Owner: ${car.ownerId} - Active: ${car.isActive}")
                     } else {
@@ -103,6 +103,9 @@ class CarViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Get a specific car and add it to the current list (for when we need a specific car)
+     */
     fun addSpecificCarToList(carId: String) {
         Log.d("CAR_VIEWMODEL", "addSpecificCarToList called with carId: $carId")
         viewModelScope.launch {
@@ -128,6 +131,7 @@ class CarViewModel @Inject constructor(
             }
         }
     }
+
     /**
      * Create a new car
      */
@@ -165,6 +169,11 @@ class CarViewModel @Inject constructor(
         return carId
     }
 
+
+    suspend fun getCarById(carId: String): Car? {
+        Log.d("CAR_VIEWMODEL", "Updating car: ${carId}")
+         return carRepository.getCarById(carId).first()
+    }
     /**
      * Update car details
      */

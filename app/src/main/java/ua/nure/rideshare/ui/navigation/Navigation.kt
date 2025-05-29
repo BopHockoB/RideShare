@@ -22,6 +22,7 @@ import ua.nure.rideshare.ui.screens.home.HomeScreen
 import ua.nure.rideshare.ui.screens.profile.ProfileScreen
 import ua.nure.rideshare.ui.screens.ride.RideCreationScreen
 import ua.nure.rideshare.ui.screens.ride.RideDetailsScreen
+import ua.nure.rideshare.ui.screens.ride.YourRideScreen
 import ua.nure.rideshare.ui.screens.search.SearchScreen
 import ua.nure.rideshare.ui.viewmodels.AuthViewModel
 import ua.nure.rideshare.ui.viewmodels.LocationViewModel
@@ -293,6 +294,9 @@ fun RideShareNavHost(
                     onNavigateToUserCars = {
                         navController.navigate(Screen.UserCars.route)
                     },
+                    onNavigateToUserRides = {
+                        navController.navigate(Screen.YourRides.route)
+                    },
                     onLogout = {
                         // When logging out, reset currentUserId and navigate back to login
                         currentUserId = null
@@ -340,35 +344,6 @@ fun RideShareNavHost(
             }
         }
 
-        // Update the CreateRide screen definition to accept carId parameter
-// Update the CreateRide composable to receive the carId
-        composable(
-            route = Screen.CreateRide.route,
-            arguments = listOf(
-                navArgument("carId") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                }
-            )
-        ) { backStackEntry ->
-            currentUserId?.let { userId ->
-                val carId = backStackEntry.arguments?.getString("carId")
-
-                RideCreationScreen(
-                    userId = userId,
-                    locationViewModel = locationViewModel,
-                    selectedCarId = carId, // Pass the car ID here
-                    onBackClick = { navController.popBackStack() },
-                    onConfirmTrip = { startLocation, endLocation, date, time, vehicle ->
-                        navController.navigate(Screen.Home.route) {
-                            popUpTo(Screen.CreateRide.route) { inclusive = true }
-                        }
-                    }
-                )
-            }
-        }
-
         // Add Car screen
         composable(Screen.AddCar.route) {
             currentUserId?.let { userId ->
@@ -401,12 +376,27 @@ fun RideShareNavHost(
             }
         }
 
-        // Placeholder for Your Rides screen
+        // Your Rides screen - UPDATED: Now uses the actual YourRideScreen
         composable(Screen.YourRides.route) {
-            // YourRidesScreen would go here when implemented
-            // For now, we'll just use a simple placeholder
-            Surface(modifier = Modifier.fillMaxSize()) {
-                Text("Your Rides Screen - Coming Soon")
+            currentUserId?.let { userId ->
+                YourRideScreen(
+                    userId = userId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onCreateNewRide = {
+                        // Navigate to user cars to select a car first
+                        navController.navigate(Screen.UserCars.route)
+                    },
+                    onRideDetails = { rideId ->
+                        navController.navigate(Screen.RideDetails.createRoute(rideId))
+                    }
+                )
+            } ?: run {
+                // If userId is null, navigate back to login
+                LaunchedEffect(Unit) {
+                    navController.navigate(Screen.Login.route) {
+                        popUpTo(navController.graph.id) { inclusive = true }
+                    }
+                }
             }
         }
     }

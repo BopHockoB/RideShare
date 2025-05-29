@@ -1,8 +1,10 @@
 package ua.nure.rideshare.ui.viewmodels
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import ua.nure.rideshare.data.model.User
@@ -15,8 +17,17 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class AuthViewModel @Inject constructor(
-    private val userRepository: UserRepository
+    private val userRepository: UserRepository,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
+
+    companion object {
+        private const val PREFS_NAME = "auth_prefs"
+        private const val KEY_USER_ID = "user_id"
+        private const val KEY_USER_EMAIL = "user_email"
+    }
+
+    private val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     // State for login
     private val _loginState = MutableStateFlow<LoginState>(LoginState.Idle)
@@ -38,6 +49,11 @@ class AuthViewModel @Inject constructor(
     private val _authEvent = MutableSharedFlow<AuthEvent>()
     val authEvent: SharedFlow<AuthEvent> = _authEvent
 
+    init {
+        // Check for existing session on initialization
+        checkLoggedInUser()
+    }
+
     /**
      * Log in a user with email and password
      */
@@ -56,6 +72,9 @@ class AuthViewModel @Inject constructor(
 
                     // Get user profile
                     val profile = userRepository.getProfileByEmail(email)
+
+                    // Save session to SharedPreferences
+                    saveUserSession(user.userId, user.email)
 
                     // Update state
                     _currentUser.value = user
@@ -123,6 +142,9 @@ class AuthViewModel @Inject constructor(
                 userRepository.insertUser(user)
                 userRepository.insertProfile(profile)
 
+                // Save session to SharedPreferences
+                saveUserSession(userId, email)
+
                 // Update state
                 _currentUser.value = user
                 _currentProfile.value = profile
@@ -139,18 +161,50 @@ class AuthViewModel @Inject constructor(
     }
 
     /**
-     * Check if user is logged in (e.g., from shared preferences or token storage)
-     * This is a placeholder - you would implement actual token validation here
+     * Check if user is logged in and restore session
      */
     fun checkLoggedInUser() {
-        // In a real app, you would check for tokens in secure storage
-        // and validate them with your backend
+        viewModelScope.launch {
+            try {
+                val savedUserId = sharedPrefs.getString(KEY_USER_ID, null)
+                val savedEmail = sharedPrefs.getString(KEY_USER_EMAIL, null)
 
-        // For now, we'll just reset the state
-        _loginState.value = LoginState.Idle
-        _currentUser.value = null
-        _currentProfile.value = null
-        _currentUserId.value = null
+                if (savedUserId != null && savedEmail != null) {
+                    // Try to restore user session
+                    val user = userRepository.getUserByEmail(savedEmail)
+                    val profile = userRepository.getProfileByEmail(savedEmail)
+
+                    if (user != null && user.userId == savedUserId) {
+                        // Session is valid, restore state
+                        _currentUser.value = user
+                        _currentProfile.value = profile
+                        _currentUserId.value = savedUserId
+                        _loginState.value = LoginState.Success
+
+                        android.util.Log.d("AUTH_VIEWMODEL", "Session restored for user: $savedUserId")
+                        return@launch
+                    } else {
+                        // Session is invalid, clear it
+                        clearUserSession()
+                    }
+                }
+
+                // No valid session found, reset state
+                _loginState.value = LoginState.Idle
+                _currentUser.value = null
+                _currentProfile.value = null
+                _currentUserId.value = null
+
+                android.util.Log.d("AUTH_VIEWMODEL", "No valid session found")
+            } catch (e: Exception) {
+                android.util.Log.e("AUTH_VIEWMODEL", "Error checking logged in user", e)
+                clearUserSession()
+                _loginState.value = LoginState.Idle
+                _currentUser.value = null
+                _currentProfile.value = null
+                _currentUserId.value = null
+            }
+        }
     }
 
     /**
@@ -158,13 +212,80 @@ class AuthViewModel @Inject constructor(
      */
     fun logout() {
         viewModelScope.launch {
-            // In a real app, invalidate tokens, etc.
+            // Clear session from SharedPreferences
+            clearUserSession()
+
+            // Reset state
             _currentUser.value = null
             _currentProfile.value = null
             _currentUserId.value = null
             _loginState.value = LoginState.Idle
+
             _authEvent.emit(AuthEvent.NavigateToLogin)
+
+            android.util.Log.d("AUTH_VIEWMODEL", "User logged out")
         }
+    }
+
+    /**
+     * Manually set current user ID (for debugging or special cases)
+     */
+    fun setCurrentUserId(userId: String) {
+        viewModelScope.launch {
+            try {
+                // Load user data
+                val user = userRepository.getUserById(userId).firstOrNull()
+                if (user != null) {
+                    val profile = userRepository.getProfileByEmail(user.email)
+
+                    // Save session
+                    saveUserSession(userId, user.email)
+
+                    // Update state
+                    _currentUser.value = user
+                    _currentProfile.value = profile
+                    _currentUserId.value = userId
+                    _loginState.value = LoginState.Success
+
+                    android.util.Log.d("AUTH_VIEWMODEL", "Current user set to: $userId")
+                } else {
+                    android.util.Log.w("AUTH_VIEWMODEL", "User not found for ID: $userId")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AUTH_VIEWMODEL", "Error setting current user", e)
+            }
+        }
+    }
+
+    /**
+     * Get current user ID synchronously (for immediate access)
+     */
+    fun getCurrentUserIdSync(): String? {
+        return _currentUserId.value ?: sharedPrefs.getString(KEY_USER_ID, null)
+    }
+
+    /**
+     * Save user session to SharedPreferences
+     */
+    private fun saveUserSession(userId: String, email: String) {
+        sharedPrefs.edit()
+            .putString(KEY_USER_ID, userId)
+            .putString(KEY_USER_EMAIL, email)
+            .apply()
+
+        android.util.Log.d("AUTH_VIEWMODEL", "User session saved: $userId")
+    }
+
+    /**
+     * Clear user session from SharedPreferences
+     */
+    private fun clearUserSession() {
+        sharedPrefs.edit()
+            .remove(KEY_USER_ID)
+            .remove(KEY_USER_EMAIL)
+            .apply()
+
+        android.util.Log.d("AUTH_VIEWMODEL", "User session cleared")
     }
 }
 

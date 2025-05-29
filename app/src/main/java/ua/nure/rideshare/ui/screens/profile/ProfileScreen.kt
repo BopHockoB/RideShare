@@ -79,6 +79,7 @@ fun ProfileScreen(
     userId: String,
     onNavigateToHome: () -> Unit,
     onNavigateToUserCars: () -> Unit,
+    onNavigateToUserRides: () -> Unit,
     onLogout: () -> Unit,
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
@@ -215,7 +216,7 @@ fun ProfileScreen(
                             ProfileMenuButton(
                                 text = "My Rides",
                                 icon = Icons.Default.TimeToLeave,
-                                onClick = { /* Navigate to rides history */ },
+                                onClick = onNavigateToUserRides,
                                 modifier = Modifier.padding(bottom = 12.dp)
                             )
 

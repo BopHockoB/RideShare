@@ -579,4 +579,8 @@ class RideViewModel @Inject constructor(
         return cal1.get(Calendar.YEAR) == cal2.get(Calendar.YEAR) &&
                 cal1.get(Calendar.DAY_OF_YEAR) == cal2.get(Calendar.DAY_OF_YEAR)
     }
+
+    fun getTripsByDriverId(driverId: String): Flow<List<Trip>> {
+        return tripRepository.getTripsByDriverId(driverId)
+    }
 }

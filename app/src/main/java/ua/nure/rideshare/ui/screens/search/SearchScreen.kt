@@ -20,16 +20,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
-import ua.nure.rideshare.data.model.Trip
-import ua.nure.rideshare.data.model.Route
 import ua.nure.rideshare.ui.screens.location.LocationData
 import ua.nure.rideshare.ui.screens.location.LocationSelectionScreen
 import ua.nure.rideshare.ui.viewmodels.LocationViewModel
-import ua.nure.rideshare.ui.viewmodels.RideViewModel
+import ua.nure.rideshare.ui.viewmodels.SearchViewModel
+import ua.nure.rideshare.ui.viewmodels.TripSearchResult
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -41,7 +40,7 @@ fun SearchScreen(
     destination: String = "",
     onNavigateToRideDetails: (String) -> Unit,
     onBackClick: () -> Unit,
-    rideViewModel: RideViewModel = hiltViewModel()
+    searchViewModel: SearchViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -67,12 +66,14 @@ fun SearchScreen(
     var showFromLocationSelector by remember { mutableStateOf(false) }
     var showToLocationSelector by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
-    var isSearching by remember { mutableStateOf(false) }
-    var searchResults by remember { mutableStateOf<List<Trip>>(emptyList()) }
-    var hasSearched by remember { mutableStateOf(false) }
 
-    // Get user location
+    // Collect data from ViewModels
+    val isSearching by searchViewModel.isLoading.collectAsState()
+    val searchResults by searchViewModel.searchResults.collectAsState()
+    val errorMessage by searchViewModel.errorMessage.collectAsState()
     val userLocation by locationViewModel.userLocation.collectAsState()
+
+    var hasSearched by remember { mutableStateOf(false) }
 
     // Update from location with user's current location
     LaunchedEffect(userLocation) {
@@ -80,6 +81,14 @@ fun SearchScreen(
             fromLatitude = userLocation!!.latitude
             fromLongitude = userLocation!!.longitude
             fromAddress = "Your current location"
+        }
+    }
+
+    // Show error messages
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+            searchViewModel.clearError()
         }
     }
 
@@ -127,24 +136,33 @@ fun SearchScreen(
                     onFromLocationClick = { showFromLocationSelector = true },
                     onToLocationClick = { showToLocationSelector = true },
                     onDateClick = { showDatePicker = true },
+                    onSwapLocations = {
+                        // Swap locations
+                        val tempLocation = fromLocation
+                        val tempAddress = fromAddress
+                        val tempLat = fromLatitude
+                        val tempLng = fromLongitude
+
+                        fromLocation = toLocation
+                        fromAddress = toAddress
+                        fromLatitude = toLatitude
+                        fromLongitude = toLongitude
+
+                        toLocation = tempLocation
+                        toAddress = tempAddress
+                        toLatitude = tempLat
+                        toLongitude = tempLng
+                    },
                     onSearchClick = {
                         if (toLocation != "Where to?" && toLocation.isNotBlank()) {
-                            isSearching = true
-                            coroutineScope.launch {
-                                try {
-                                    // Simulate search - in real app, you'd search by coordinates
-                                    rideViewModel.loadAvailableTrips()
-                                    // For now, get all available trips
-                                    // In a real implementation, you'd filter by location, date, etc.
-                                    searchResults = emptyList() // Placeholder
-                                    hasSearched = true
-                                    Toast.makeText(context, "Search completed", Toast.LENGTH_SHORT).show()
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "Search failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                                } finally {
-                                    isSearching = false
-                                }
-                            }
+                            hasSearched = true
+                            searchViewModel.searchTrips(
+                                fromQuery = fromLocation,
+                                toQuery = toLocation,
+                                departureDate = selectedDate?.time,
+                                passengerCount = minSeats,
+                                maxPrice = maxPrice.toDouble()
+                            )
                         } else {
                             Toast.makeText(context, "Please select a destination", Toast.LENGTH_SHORT).show()
                         }
@@ -165,7 +183,7 @@ fun SearchScreen(
                 }
             }
 
-            // Search Results Header
+            // Search Results or Popular Routes
             if (hasSearched) {
                 item {
                     Spacer(modifier = Modifier.height(24.dp))
@@ -176,35 +194,59 @@ fun SearchScreen(
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
                 }
-            }
 
-            // Search Results
-            if (searchResults.isNotEmpty()) {
-                items(searchResults) { trip ->
-                    TripResultCard(
-                        trip = trip,
-                        onClick = { onNavigateToRideDetails(trip.tripId) }
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
+                if (searchResults.isNotEmpty()) {
+                    items(searchResults) { result ->
+                        TripResultCard(
+                            searchResult = result,
+                            onClick = { onNavigateToRideDetails(result.trip.tripId) }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                } else if (!isSearching) {
+                    item {
+                        EmptySearchResults()
+                    }
                 }
-            } else if (hasSearched && !isSearching) {
-                // Empty state
+            } else {
+                // Show popular trips when no search has been made
                 item {
-                    EmptySearchResults()
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text(
+                        text = "Popular Routes",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
                 }
-            }
 
-            // Popular Routes (when no search has been made)
-            if (!hasSearched) {
-                item {
-                    PopularRoutesSection(
-                        onRouteClick = { route ->
-                            toLocation = route.destination
-                            toAddress = route.address
-                            toLatitude = route.latitude
-                            toLongitude = route.longitude
-                        }
-                    )
+                // Load popular trips on first load
+
+                    searchViewModel.loadPopularTrips()
+
+
+                if (searchResults.isNotEmpty()) {
+                    items(searchResults) { result ->
+                        TripResultCard(
+                            searchResult = result,
+                            onClick = {
+                                // Pre-fill search with this route
+                                fromLocation = result.route.startLocation
+                                fromAddress = result.route.startAddress
+                                fromLatitude = result.route.startLatitude
+                                fromLongitude = result.route.startLongitude
+
+                                toLocation = result.route.endLocation
+                                toAddress = result.route.endAddress
+                                toLatitude = result.route.endLatitude
+                                toLongitude = result.route.endLongitude
+
+                                // Navigate to details
+                                onNavigateToRideDetails(result.trip.tripId)
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
                 }
             }
         }
@@ -219,7 +261,7 @@ fun SearchScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(600.dp)
+                    .fillMaxHeight(0.9f)
                     .padding(16.dp),
                 shape = RoundedCornerShape(16.dp)
             ) {
@@ -247,7 +289,7 @@ fun SearchScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(600.dp)
+                    .fillMaxHeight(0.9f)
                     .padding(16.dp),
                 shape = RoundedCornerShape(16.dp)
             ) {
@@ -269,7 +311,10 @@ fun SearchScreen(
 
     // Date Picker
     if (showDatePicker) {
-        val datePickerState = rememberDatePickerState()
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = selectedDate?.time ?: System.currentTimeMillis()
+        )
+
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
             confirmButton = {
@@ -306,6 +351,7 @@ fun SearchForm(
     onFromLocationClick: () -> Unit,
     onToLocationClick: () -> Unit,
     onDateClick: () -> Unit,
+    onSwapLocations: () -> Unit,
     onSearchClick: () -> Unit,
     isSearching: Boolean
 ) {
@@ -322,19 +368,19 @@ fun SearchForm(
                 label = "From",
                 location = fromLocation,
                 address = fromAddress,
-                iconTint = Color.Red,
+                iconTint = Color(0xFF00A16B),
                 onClick = onFromLocationClick
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
-
             // Swap Button
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.Center
             ) {
                 IconButton(
-                    onClick = { /* Implement location swap */ },
+                    onClick = onSwapLocations,
                     modifier = Modifier
                         .size(32.dp)
                         .clip(CircleShape)
@@ -349,14 +395,12 @@ fun SearchForm(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
             // To Location
             LocationInput(
                 label = "To",
                 location = toLocation,
                 address = toAddress,
-                iconTint = Color(0xFF00A16B),
+                iconTint = Color.Red,
                 onClick = onToLocationClick
             )
 
@@ -364,9 +408,9 @@ fun SearchForm(
 
             // Date Selection
             OutlinedTextField(
-                value = selectedDate?.let { dateFormatter.format(it) } ?: "",
+                value = selectedDate?.let { dateFormatter.format(it) } ?: "Today",
                 onValueChange = { },
-                label = { Text("Date (optional)") },
+                label = { Text("Date") },
                 readOnly = true,
                 leadingIcon = {
                     Icon(
@@ -377,7 +421,7 @@ fun SearchForm(
                 },
                 trailingIcon = {
                     if (selectedDate != null) {
-                        IconButton(onClick = { /* Clear date */ }) {
+                        IconButton(onClick = { /* Clear date - implement if needed */ }) {
                             Icon(
                                 imageVector = Icons.Default.Clear,
                                 contentDescription = "Clear date",
@@ -388,11 +432,12 @@ fun SearchForm(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onDateClick() },
+                    .clickable(enabled = !isSearching) { onDateClick() },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color(0xFF00A16B),
                     unfocusedBorderColor = Color.LightGray
-                )
+                ),
+                enabled = !isSearching
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -441,7 +486,8 @@ fun LocationInput(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -462,19 +508,20 @@ fun LocationInput(
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.padding(top = 2.dp)
             )
-            if (address.isNotBlank() && location != address) {
+            if (address.isNotBlank() && location != address && address != "Use your current location") {
                 Text(
                     text = address,
                     fontSize = 12.sp,
                     color = Color.Gray,
-                    modifier = Modifier.padding(top = 2.dp)
+                    modifier = Modifier.padding(top = 2.dp),
+                    maxLines = 1
                 )
             }
         }
 
         Icon(
-            imageVector = Icons.Default.Edit,
-            contentDescription = "Edit",
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = "Select",
             tint = Color.Gray,
             modifier = Modifier.size(20.dp)
         )
@@ -551,7 +598,7 @@ fun FiltersSection(
 
 @Composable
 fun TripResultCard(
-    trip: Trip,
+    searchResult: TripSearchResult,
     onClick: () -> Unit
 ) {
     Card(
@@ -564,19 +611,49 @@ fun TripResultCard(
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
-            // Trip header with price
+            // Driver info and price
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "${searchResult.driverProfile.firstName} ${searchResult.driverProfile.lastName}",
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 16.sp
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = "Rating",
+                            tint = Color(0xFFFFB800),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = String.format("%.1f", searchResult.driverProfile.rating),
+                            fontSize = 14.sp,
+                            color = Color.Gray,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+
+                        if (searchResult.car != null) {
+                            Text(
+                                text = " • ${searchResult.car.make} ${searchResult.car.model}",
+                                fontSize = 14.sp,
+                                color = Color.Gray
+                            )
+                        }
+                    }
+                }
+
                 Text(
-                    text = "Available Ride",
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = "$${String.format("%.2f", trip.price)}",
-                    fontSize = 18.sp,
+                    text = "$${String.format("%.2f", searchResult.trip.price)}",
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF00A16B)
                 )
@@ -584,27 +661,99 @@ fun TripResultCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Route info
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    // From
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.LocationOn,
+                            contentDescription = null,
+                            tint = Color(0xFF00A16B),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = searchResult.route.startLocation,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(start = 4.dp),
+                            maxLines = 1
+                        )
+                    }
+
+                    // To
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocationOn,
+                            contentDescription = null,
+                            tint = Color.Red,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = searchResult.route.endLocation,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(start = 4.dp),
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             // Trip details
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Schedule,
+                        contentDescription = "Time",
+                        tint = Color.Gray,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
+                            .format(Date(searchResult.trip.departureTime)),
+                        fontSize = 14.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.EventSeat,
+                        contentDescription = "Seats",
+                        tint = Color.Gray,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "${searchResult.trip.availableSeats} seats",
+                        fontSize = 14.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
+
                 Text(
-                    text = "Departure: ${SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(trip.departureTime))}",
-                    fontSize = 14.sp,
-                    color = Color.Gray
-                )
-                Text(
-                    text = "${trip.availableSeats} seats",
+                    text = "${searchResult.route.distance.toInt()} km",
                     fontSize = 14.sp,
                     color = Color.Gray
                 )
             }
 
-            if (!trip.notes.isNullOrBlank()) {
+            if (!searchResult.trip.notes.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = trip.notes,
+                    text = searchResult.trip.notes,
                     fontSize = 12.sp,
                     color = Color.Gray,
                     maxLines = 2
@@ -646,71 +795,3 @@ fun EmptySearchResults() {
         )
     }
 }
-
-@Composable
-fun PopularRoutesSection(
-    onRouteClick: (PopularRoute) -> Unit
-) {
-    val popularRoutes = remember {
-        listOf(
-            PopularRoute("Downtown", "123 Main St, Downtown", 40.7589, -73.9851),
-            PopularRoute("Airport", "JFK Airport, Queens", 40.6413, -73.7781),
-            PopularRoute("University", "State University Campus", 40.7282, -73.9942),
-            PopularRoute("Mall", "Shopping Center Plaza", 40.7505, -73.9934)
-        )
-    }
-
-    Column(
-        modifier = Modifier.padding(top = 24.dp)
-    ) {
-        Text(
-            text = "Popular Destinations",
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        popularRoutes.forEach { route ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp)
-                    .clickable { onRouteClick(route) },
-                colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFFF8F9FA)
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.TrendingUp,
-                        contentDescription = null,
-                        tint = Color(0xFF00A16B),
-                        modifier = Modifier.padding(end = 12.dp)
-                    )
-
-                    Column {
-                        Text(
-                            text = route.destination,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = route.address,
-                            fontSize = 12.sp,
-                            color = Color.Gray
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-data class PopularRoute(
-    val destination: String,
-    val address: String,
-    val latitude: Double,
-    val longitude: Double
-)

@@ -54,7 +54,30 @@ class SearchViewModel @Inject constructor(
     val currentFilters: StateFlow<SearchFilters> = _currentFilters
 
     /**
-     * Search for trips based on criteria
+     * Initialize and load some sample data for testing
+     */
+    init {
+        // Load some trips on initialization for testing
+        loadAllAvailableTrips()
+    }
+
+    /**
+     * Load all available trips (for testing purposes)
+     */
+    private fun loadAllAvailableTrips() {
+        viewModelScope.launch {
+            try {
+                tripRepository.getAvailableTrips().collect { trips ->
+                    Log.d("SEARCH_VIEWMODEL", "Available trips updated: ${trips.size} trips")
+                }
+            } catch (e: Exception) {
+                Log.e("SEARCH_VIEWMODEL", "Error loading available trips", e)
+            }
+        }
+    }
+
+    /**
+     * Search for trips based on criteria - SIMPLIFIED VERSION
      */
     fun searchTrips(
         fromQuery: String,
@@ -67,200 +90,131 @@ class SearchViewModel @Inject constructor(
         viewModelScope.launch {
             _isLoading.value = true
             _errorMessage.value = null
+            _searchResults.value = emptyList() // Clear previous results
 
             try {
-                Log.d("SEARCH_VIEWMODEL", "Searching trips from '$fromQuery' to '$toQuery'")
+                Log.d("SEARCH_VIEWMODEL", "=== SEARCH DEBUG ===")
+                Log.d("SEARCH_VIEWMODEL", "From: '$fromQuery'")
+                Log.d("SEARCH_VIEWMODEL", "To: '$toQuery'")
+                Log.d("SEARCH_VIEWMODEL", "Passengers: $passengerCount")
 
-                // Get all available trips
-                tripRepository.getAvailableTrips(passengerCount).take(1).collect { trips ->
-                    Log.d("SEARCH_VIEWMODEL", "Found ${trips.size} available trips")
+                // If both queries are empty, load all available trips
+                if (fromQuery.isBlank() && toQuery.isBlank()) {
+                    Log.d("SEARCH_VIEWMODEL", "Both queries empty, loading all trips")
+                    loadPopularTrips()
+                    return@launch
+                }
 
-                    if (trips.isEmpty()) {
-                        _searchResults.value = emptyList()
-                        _isLoading.value = false
-                        return@collect
-                    }
+                // Get all trips first
+                val allTrips = tripRepository.getAvailableTrips().first()
+                Log.d("SEARCH_VIEWMODEL", "Total trips in database: ${allTrips.size}")
 
-                    // For each trip, get the associated route, driver profile, and car
-                    val searchResults = mutableListOf<TripSearchResult>()
+                // Filter for available trips only
+                val availableTrips = allTrips.filter {trip ->
+                    trip.status == "SCHEDULED" &&
+                            trip.availableSeats >= passengerCount &&
+                            trip.departureTime > System.currentTimeMillis()
+                }
+                Log.d("SEARCH_VIEWMODEL", "Available trips: ${availableTrips.size}")
 
-                    for (trip in trips) {
-                        try {
-                            // Get route information
-                            val route = getRouteById(trip.routeId)
-                            if (route == null) {
-                                Log.w("SEARCH_VIEWMODEL", "Route not found for trip ${trip.tripId}")
-                                continue
-                            }
+                // Build search results
+                val searchResults = mutableListOf<TripSearchResult>()
 
-                            // Check if route matches search criteria
-                            if (!matchesLocationCriteria(route, fromQuery, toQuery)) {
-                                Log.d("SEARCH_VIEWMODEL", "Route doesn't match criteria: ${route.startLocation} -> ${route.endLocation}")
-                                continue
-                            }
-
-                            // Get driver profile
-                            val driverProfile = getProfileById(trip.driverId)
-                            if (driverProfile == null) {
-                                Log.w("SEARCH_VIEWMODEL", "Driver profile not found for trip ${trip.tripId}")
-                                continue
-                            }
-
-                            // Apply rating filter
-                            if (minRating != null && driverProfile.rating < minRating) {
-                                Log.d("SEARCH_VIEWMODEL", "Driver rating ${driverProfile.rating} below minimum $minRating")
-                                continue
-                            }
-
-                            // Apply price filter
-                            if (maxPrice != null && trip.price > maxPrice) {
-                                Log.d("SEARCH_VIEWMODEL", "Trip price ${trip.price} above maximum $maxPrice")
-                                continue
-                            }
-
-                            // Apply date filter
-                            if (departureDate != null && !matchesDateCriteria(trip.departureTime, departureDate)) {
-                                Log.d("SEARCH_VIEWMODEL", "Trip date doesn't match criteria")
-                                continue
-                            }
-
-                            // Get car information (optional)
-                            val car = trip.carId?.let { getCarById(it) }
-
-                            // Create search result
-                            val searchResult = TripSearchResult(
-                                trip = trip,
-                                route = route,
-                                driverProfile = driverProfile,
-                                car = car
-                            )
-
-                            searchResults.add(searchResult)
-                            Log.d("SEARCH_VIEWMODEL", "Added search result: ${route.startLocation} -> ${route.endLocation}")
-
-                        } catch (e: Exception) {
-                            Log.e("SEARCH_VIEWMODEL", "Error processing trip ${trip.tripId}: ${e.message}", e)
+                for (trip in availableTrips) {
+                    try {
+                        // Get route
+                        val route = routeRepository.getRouteById(trip.routeId).first()
+                        if (route == null) {
+                            Log.w("SEARCH_VIEWMODEL", "No route found for trip ${trip.tripId}")
+                            continue
                         }
+
+                        Log.d("SEARCH_VIEWMODEL", "Route: ${route.startLocation} -> ${route.endLocation}")
+
+                        // Apply location matching with more flexible criteria
+                        val fromMatches = fromQuery.isBlank() ||
+                                fromQuery.equals("Current Location", ignoreCase = true) ||
+                                route.startLocation.contains(fromQuery, ignoreCase = true) ||
+                                route.startAddress.contains(fromQuery, ignoreCase = true) ||
+                                fromQuery.contains(route.startLocation, ignoreCase = true)
+
+                        val toMatches = toQuery.isBlank() ||
+                                route.endLocation.contains(toQuery, ignoreCase = true) ||
+                                route.endAddress.contains(toQuery, ignoreCase = true) ||
+                                toQuery.contains(route.endLocation, ignoreCase = true)
+
+                        if (!fromMatches || !toMatches) {
+                            Log.d("SEARCH_VIEWMODEL", "Location mismatch - From matches: $fromMatches, To matches: $toMatches")
+                            continue
+                        }
+
+                        // Get driver profile
+                        val driverProfile = userRepository.getProfileById(trip.driverId).first()
+                        if (driverProfile == null) {
+                            Log.w("SEARCH_VIEWMODEL", "No driver profile found for trip ${trip.tripId}")
+                            continue
+                        }
+
+                        // Apply filters
+                        if (maxPrice != null && trip.price > maxPrice) {
+                            Log.d("SEARCH_VIEWMODEL", "Price filter failed: ${trip.price} > $maxPrice")
+                            continue
+                        }
+
+                        if (minRating != null && driverProfile.rating < minRating) {
+                            Log.d("SEARCH_VIEWMODEL", "Rating filter failed: ${driverProfile.rating} < $minRating")
+                            continue
+                        }
+
+                        if (departureDate != null && !isSameDay(trip.departureTime, departureDate)) {
+                            Log.d("SEARCH_VIEWMODEL", "Date filter failed")
+                            continue
+                        }
+
+                        // Get car (optional)
+                        val car = trip.carId?.let { carId ->
+                            carRepository.getCarById(carId).first()
+                        }
+
+                        // Add to results
+                        val searchResult = TripSearchResult(
+                            trip = trip,
+                            route = route,
+                            driverProfile = driverProfile,
+                            car = car
+                        )
+                        searchResults.add(searchResult)
+                        Log.d("SEARCH_VIEWMODEL", "✅ Added trip: ${route.startLocation} -> ${route.endLocation}")
+
+                    } catch (e: Exception) {
+                        Log.e("SEARCH_VIEWMODEL", "Error processing trip ${trip.tripId}", e)
                     }
+                }
 
-                    // Sort results by departure time (earliest first)
-                    val sortedResults = searchResults.sortedBy { it.trip.departureTime }
+                // Sort by departure time
+                val sortedResults = searchResults.sortedBy { it.trip.departureTime }
 
-                    Log.d("SEARCH_VIEWMODEL", "Final search results: ${sortedResults.size} trips")
-                    _searchResults.value = sortedResults
-                    _isLoading.value = false
+                Log.d("SEARCH_VIEWMODEL", "=== SEARCH COMPLETE ===")
+                Log.d("SEARCH_VIEWMODEL", "Found ${sortedResults.size} matching trips")
+
+                _searchResults.value = sortedResults
+                _isLoading.value = false
+
+                // If no results found, show a helpful message
+                if (sortedResults.isEmpty()) {
+                    _errorMessage.value = "No trips found matching your criteria. Try adjusting your search."
                 }
 
             } catch (e: Exception) {
-                Log.e("SEARCH_VIEWMODEL", "Error searching trips: ${e.message}", e)
-                _errorMessage.value = e.message ?: "Failed to search trips"
+                Log.e("SEARCH_VIEWMODEL", "Search error", e)
+                _errorMessage.value = "Search failed: ${e.message}"
                 _isLoading.value = false
             }
         }
     }
 
     /**
-     * Search trips by geographic area
-     */
-    fun searchTripsByArea(
-        startLat: Double,
-        startLng: Double,
-        endLat: Double,
-        endLng: Double,
-        radiusKm: Double = 5.0,
-        passengerCount: Int = 1
-    ) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _errorMessage.value = null
-
-            try {
-                Log.d("SEARCH_VIEWMODEL", "Searching trips by area")
-
-                // Calculate search bounds
-                val latRange = radiusKm / 111.0 // Approximate km to degrees
-                val lngRange = radiusKm / (111.0 * kotlin.math.cos(Math.toRadians(startLat)))
-
-                val startMinLat = startLat - latRange
-                val startMaxLat = startLat + latRange
-                val startMinLng = startLng - lngRange
-                val startMaxLng = startLng + lngRange
-
-                val endMinLat = endLat - latRange
-                val endMaxLat = endLat + latRange
-                val endMinLng = endLng - lngRange
-                val endMaxLng = endLng + lngRange
-
-                // Search routes in the specified areas
-                routeRepository.getRoutesByStartAndEndArea(
-                    startMinLat, startMaxLat, startMinLng, startMaxLng,
-                    endMinLat, endMaxLat, endMinLng, endMaxLng
-                ).take(1).collect { routes ->
-                    Log.d("SEARCH_VIEWMODEL", "Found ${routes.size} routes in area")
-
-                    if (routes.isEmpty()) {
-                        _searchResults.value = emptyList()
-                        _isLoading.value = false
-                        return@collect
-                    }
-
-                    // Get trips for these routes
-                    val searchResults = mutableListOf<TripSearchResult>()
-
-                    for (route in routes) {
-                        try {
-                            // Get trips for this route
-                            tripRepository.getTripsByRouteId(route.routeId).take(1).collect { trips ->
-                                for (trip in trips) {
-                                    // Check if trip has enough seats and is available
-                                    if (trip.availableSeats < passengerCount || trip.status != "SCHEDULED") {
-                                        continue
-                                    }
-
-                                    // Get driver profile
-                                    val driverProfile = getProfileById(trip.driverId)
-                                    if (driverProfile == null) {
-                                        Log.w("SEARCH_VIEWMODEL", "Driver profile not found for trip ${trip.tripId}")
-                                        continue
-                                    }
-
-                                    // Get car information (optional)
-                                    val car = trip.carId?.let { getCarById(it) }
-
-                                    // Create search result
-                                    val searchResult = TripSearchResult(
-                                        trip = trip,
-                                        route = route,
-                                        driverProfile = driverProfile,
-                                        car = car
-                                    )
-
-                                    searchResults.add(searchResult)
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("SEARCH_VIEWMODEL", "Error processing route ${route.routeId}: ${e.message}", e)
-                        }
-                    }
-
-                    // Sort results by departure time
-                    val sortedResults = searchResults.sortedBy { it.trip.departureTime }
-
-                    Log.d("SEARCH_VIEWMODEL", "Area search results: ${sortedResults.size} trips")
-                    _searchResults.value = sortedResults
-                    _isLoading.value = false
-                }
-
-            } catch (e: Exception) {
-                Log.e("SEARCH_VIEWMODEL", "Error searching trips by area: ${e.message}", e)
-                _errorMessage.value = e.message ?: "Failed to search trips in area"
-                _isLoading.value = false
-            }
-        }
-    }
-
-    /**
-     * Get popular or recent trips
+     * Load popular/recent trips (simplified)
      */
     fun loadPopularTrips() {
         viewModelScope.launch {
@@ -268,66 +222,161 @@ class SearchViewModel @Inject constructor(
             _errorMessage.value = null
 
             try {
-                tripRepository.getAvailableTrips().take(1).collect { trips ->
-                    // Take first 10 trips as "popular" (in a real app, this would be based on booking frequency)
-                    val popularTrips = trips.take(10)
+                Log.d("SEARCH_VIEWMODEL", "Loading popular trips...")
 
-                    val searchResults = mutableListOf<TripSearchResult>()
+                // Get all available trips
+                val availableTrips = tripRepository.getAvailableTrips().first()
+                Log.d("SEARCH_VIEWMODEL", "Found ${availableTrips.size} available trips")
 
-                    for (trip in popularTrips) {
-                        try {
-                            val route = getRouteById(trip.routeId)
-                            val driverProfile = route?.let { getProfileById(trip.driverId) }
-                            val car = trip.carId?.let { getCarById(it) }
+                val searchResults = mutableListOf<TripSearchResult>()
 
-                            if (route != null && driverProfile != null) {
-                                searchResults.add(
-                                    TripSearchResult(
-                                        trip = trip,
-                                        route = route,
-                                        driverProfile = driverProfile,
-                                        car = car
-                                    )
-                                )
-                            }
-                        } catch (e: Exception) {
-                            Log.e("SEARCH_VIEWMODEL", "Error loading popular trip ${trip.tripId}: ${e.message}", e)
+                // Take up to 10 trips
+                for (trip in availableTrips.take(10)) {
+                    try {
+                        // Get route
+                        val route = routeRepository.getRouteById(trip.routeId).first()
+                        if (route == null) continue
+
+                        // Get driver profile
+                        val driverProfile = userRepository.getProfileById(trip.driverId).first()
+                        if (driverProfile == null) continue
+
+                        // Get car (optional)
+                        val car = trip.carId?.let { carId ->
+                            carRepository.getCarById(carId).first()
                         }
-                    }
 
-                    _searchResults.value = searchResults.sortedBy { it.trip.departureTime }
-                    _isLoading.value = false
+                        searchResults.add(
+                            TripSearchResult(
+                                trip = trip,
+                                route = route,
+                                driverProfile = driverProfile,
+                                car = car
+                            )
+                        )
+                    } catch (e: Exception) {
+                        Log.e("SEARCH_VIEWMODEL", "Error loading trip ${trip.tripId}", e)
+                    }
                 }
+
+                val sortedResults = searchResults.sortedBy { it.trip.departureTime }
+                Log.d("SEARCH_VIEWMODEL", "Loaded ${sortedResults.size} popular trips")
+
+                _searchResults.value = sortedResults
+                _isLoading.value = false
+
             } catch (e: Exception) {
-                Log.e("SEARCH_VIEWMODEL", "Error loading popular trips: ${e.message}", e)
-                _errorMessage.value = e.message ?: "Failed to load popular trips"
+                Log.e("SEARCH_VIEWMODEL", "Error loading popular trips", e)
+                _errorMessage.value = "Failed to load trips: ${e.message}"
                 _isLoading.value = false
             }
         }
     }
 
     /**
-     * Apply additional filters to current search results
+     * Search by coordinates (simplified)
+     */
+    fun searchTripsByCoordinates(
+        fromLat: Double,
+        fromLng: Double,
+        toLat: Double,
+        toLng: Double,
+        radiusKm: Double = 10.0,
+        passengerCount: Int = 1
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _errorMessage.value = null
+
+            try {
+                Log.d("SEARCH_VIEWMODEL", "Searching by coordinates...")
+                Log.d("SEARCH_VIEWMODEL", "From: ($fromLat, $fromLng)")
+                Log.d("SEARCH_VIEWMODEL", "To: ($toLat, $toLng)")
+                Log.d("SEARCH_VIEWMODEL", "Radius: $radiusKm km")
+
+                // Calculate search bounds
+                val kmPerDegree = 111.0
+                val latRange = radiusKm / kmPerDegree
+                val lngRange = radiusKm / (kmPerDegree * kotlin.math.cos(Math.toRadians(fromLat)))
+
+                // Get all routes first
+                val allRoutes = routeRepository.allRoutes.first()
+                Log.d("SEARCH_VIEWMODEL", "Total routes: ${allRoutes.size}")
+
+                // Filter routes by location
+                val matchingRoutes = allRoutes.filter { route ->
+                    val startMatches = isWithinRadius(
+                        route.startLatitude, route.startLongitude,
+                        fromLat, fromLng, radiusKm
+                    )
+                    val endMatches = isWithinRadius(
+                        route.endLatitude, route.endLongitude,
+                        toLat, toLng, radiusKm
+                    )
+                    startMatches && endMatches
+                }
+
+                Log.d("SEARCH_VIEWMODEL", "Matching routes: ${matchingRoutes.size}")
+
+                val searchResults = mutableListOf<TripSearchResult>()
+
+                // Get trips for matching routes
+                for (route in matchingRoutes) {
+                    val trips = tripRepository.getTripsByRouteId(route.routeId).first()
+
+                    for (trip in trips) {
+                        if (trip.status != "SCHEDULED" ||
+                            trip.availableSeats < passengerCount ||
+                            trip.departureTime <= System.currentTimeMillis()) {
+                            continue
+                        }
+
+                        try {
+                            val driverProfile = userRepository.getProfileById(trip.driverId).first()
+                            if (driverProfile == null) continue
+
+                            val car = trip.carId?.let { carRepository.getCarById(it).first() }
+
+                            searchResults.add(
+                                TripSearchResult(
+                                    trip = trip,
+                                    route = route,
+                                    driverProfile = driverProfile,
+                                    car = car
+                                )
+                            )
+                        } catch (e: Exception) {
+                            Log.e("SEARCH_VIEWMODEL", "Error processing trip ${trip.tripId}", e)
+                        }
+                    }
+                }
+
+                val sortedResults = searchResults.sortedBy { it.trip.departureTime }
+                Log.d("SEARCH_VIEWMODEL", "Found ${sortedResults.size} trips by location")
+
+                _searchResults.value = sortedResults
+                _isLoading.value = false
+
+            } catch (e: Exception) {
+                Log.e("SEARCH_VIEWMODEL", "Error searching by coordinates", e)
+                _errorMessage.value = "Location search failed: ${e.message}"
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Apply filters to current results
      */
     fun applyFilters(filters: SearchFilters) {
         _currentFilters.value = filters
 
         val currentResults = _searchResults.value
         val filteredResults = currentResults.filter { result ->
-            // Price filter
             (filters.maxPrice == null || result.trip.price <= filters.maxPrice) &&
-                    // Rating filter
                     (filters.minRating == null || result.driverProfile.rating >= filters.minRating) &&
-                    // Departure time filter
                     (filters.earliestDeparture == null || result.trip.departureTime >= filters.earliestDeparture) &&
-                    (filters.latestDeparture == null || result.trip.departureTime <= filters.latestDeparture) &&
-                    // Car amenities filter (if specified)
-                    (filters.requiredAmenities == null ||
-                            result.car?.amenities?.let { amenities ->
-                                filters.requiredAmenities.all { required ->
-                                    amenities.contains(required, ignoreCase = true)
-                                }
-                            } == true)
+                    (filters.latestDeparture == null || result.trip.departureTime <= filters.latestDeparture)
         }
 
         // Apply sorting
@@ -337,78 +386,59 @@ class SearchViewModel @Inject constructor(
             SortOption.DEPARTURE_TIME -> filteredResults.sortedBy { it.trip.departureTime }
             SortOption.RATING -> filteredResults.sortedByDescending { it.driverProfile.rating }
             SortOption.DISTANCE -> filteredResults.sortedBy { it.route.distance }
-            else -> filteredResults.sortedBy { it.trip.departureTime }
         }
 
         _searchResults.value = sortedResults
     }
 
     /**
-     * Clear current search results
+     * Clear results
      */
     fun clearResults() {
         _searchResults.value = emptyList()
+        _errorMessage.value = null
     }
 
     /**
-     * Clear error message
+     * Clear error
      */
     fun clearError() {
         _errorMessage.value = null
     }
 
-    // Helper methods
+    // Helper functions
 
-    private suspend fun getRouteById(routeId: String): Route? {
-        var route: Route? = null
-        routeRepository.getRouteById(routeId).take(1).collect {
-            route = it
-        }
-        return route
+    private fun isSameDay(timestamp1: Long, timestamp2: Long): Boolean {
+        val cal1 = java.util.Calendar.getInstance().apply { timeInMillis = timestamp1 }
+        val cal2 = java.util.Calendar.getInstance().apply { timeInMillis = timestamp2 }
+
+        return cal1.get(java.util.Calendar.YEAR) == cal2.get(java.util.Calendar.YEAR) &&
+                cal1.get(java.util.Calendar.DAY_OF_YEAR) == cal2.get(java.util.Calendar.DAY_OF_YEAR)
     }
 
-    private suspend fun getProfileById(userId: String): Profile? {
-        var profile: Profile? = null
-        userRepository.getProfileById(userId).take(1).collect {
-            profile = it
-        }
-        return profile
+    private fun isWithinRadius(
+        lat1: Double, lng1: Double,
+        lat2: Double, lng2: Double,
+        radiusKm: Double
+    ): Boolean {
+        val distance = calculateDistance(lat1, lng1, lat2, lng2)
+        return distance <= radiusKm
     }
 
-    private suspend fun getCarById(carId: String): Car? {
-        var car: Car? = null
-        carRepository.getCarById(carId).take(1).collect {
-            car = it
-        }
-        return car
-    }
+    private fun calculateDistance(
+        lat1: Double, lng1: Double,
+        lat2: Double, lng2: Double
+    ): Double {
+        val earthRadius = 6371.0 // km
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLng = Math.toRadians(lng2 - lng1)
 
-    private fun matchesLocationCriteria(route: Route, fromQuery: String, toQuery: String): Boolean {
-        // Simple text matching - in a real app, this would use geocoding and fuzzy matching
-        val fromMatches = fromQuery.isBlank() ||
-                route.startLocation.contains(fromQuery, ignoreCase = true) ||
-                route.startAddress.contains(fromQuery, ignoreCase = true) ||
-                fromQuery.contains("current", ignoreCase = true) // Handle "Current Location"
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLng / 2) * Math.sin(dLng / 2)
 
-        val toMatches = toQuery.isBlank() ||
-                route.endLocation.contains(toQuery, ignoreCase = true) ||
-                route.endAddress.contains(toQuery, ignoreCase = true)
-
-        return fromMatches && toMatches
-    }
-
-    private fun matchesDateCriteria(tripDepartureTime: Long, searchDate: Long): Boolean {
-        // Check if trip is on the same day as the search date
-        val tripCalendar = java.util.Calendar.getInstance().apply {
-            timeInMillis = tripDepartureTime
-        }
-
-        val searchCalendar = java.util.Calendar.getInstance().apply {
-            timeInMillis = searchDate
-        }
-
-        return tripCalendar.get(java.util.Calendar.YEAR) == searchCalendar.get(java.util.Calendar.YEAR) &&
-                tripCalendar.get(java.util.Calendar.DAY_OF_YEAR) == searchCalendar.get(java.util.Calendar.DAY_OF_YEAR)
+        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        return earthRadius * c
     }
 }
 

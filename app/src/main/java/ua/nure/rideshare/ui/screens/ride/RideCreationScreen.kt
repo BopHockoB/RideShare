@@ -239,36 +239,58 @@ fun RideCreationScreen(
                 onClick = { showEndLocationSelector = true }
             )
 
-            // Start location selection dialog
+            // Start location selection dialog - FIXED with proper height constraints
             if (showStartLocationSelector) {
-                LocationSelectionScreen(
-                    initialQuery = startLocation,
-                    onLocationSelected = { locationData ->
-                        startLocation = locationData.name
-                        startAddress = locationData.address
-                        startLatitude = locationData.latLng.latitude
-                        startLongitude = locationData.latLng.longitude
-                        showStartLocationSelector = false
-                    },
-                    onDismiss = { showStartLocationSelector = false },
-                    locationViewModel = locationViewModel
-                )
+                Dialog(
+                    onDismissRequest = { showStartLocationSelector = false },
+                    properties = DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        LocationSelectionScreen(
+                            initialQuery = startLocation,
+                            onLocationSelected = { locationData ->
+                                startLocation = locationData.name
+                                startAddress = locationData.address
+                                startLatitude = locationData.latLng.latitude
+                                startLongitude = locationData.latLng.longitude
+                                showStartLocationSelector = false
+                            },
+                            onDismiss = { showStartLocationSelector = false },
+                            locationViewModel = locationViewModel
+                        )
+                    }
+                }
             }
 
-            // End location selection dialog
+            // End location selection dialog - FIXED with proper height constraints
             if (showEndLocationSelector) {
-                LocationSelectionScreen(
-                    initialQuery = endLocation,
-                    onLocationSelected = { locationData ->
-                        endLocation = locationData.name
-                        endAddress = locationData.address
-                        endLatitude = locationData.latLng.latitude
-                        endLongitude = locationData.latLng.longitude
-                        showEndLocationSelector = false
-                    },
-                    onDismiss = { showEndLocationSelector = false },
-                    locationViewModel = locationViewModel
-                )
+                Dialog(
+                    onDismissRequest = { showEndLocationSelector = false },
+                    properties = DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        LocationSelectionScreen(
+                            initialQuery = endLocation,
+                            onLocationSelected = {
+                                endLocation = it.name
+                                endAddress = it.address
+                                endLatitude = it.latLng.latitude
+                                endLongitude = it.latLng.longitude
+                                showEndLocationSelector = false
+                            },
+                            onDismiss = { showEndLocationSelector = false },
+                            locationViewModel = locationViewModel
+                        )
+                    }
+                }
             }
 
             // Vehicle Selection

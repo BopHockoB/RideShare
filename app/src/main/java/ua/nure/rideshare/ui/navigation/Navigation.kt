@@ -3,19 +3,29 @@ package ua.nure.rideshare.ui.navigation
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import ua.nure.rideshare.data.model.Car
+import ua.nure.rideshare.data.model.Profile
+import ua.nure.rideshare.data.model.Route
+import ua.nure.rideshare.data.model.Trip
 import ua.nure.rideshare.ui.screens.auth.LoginScreen
 import ua.nure.rideshare.ui.screens.auth.RegisterScreen
+import ua.nure.rideshare.ui.screens.booking.BookingManagementScreen
+import ua.nure.rideshare.ui.screens.booking.BookingRequestScreen
 import ua.nure.rideshare.ui.screens.car.CarCreationScreen
 import ua.nure.rideshare.ui.screens.car.UserCarsScreen
 import ua.nure.rideshare.ui.screens.home.HomeScreen
@@ -26,6 +36,8 @@ import ua.nure.rideshare.ui.screens.ride.YourRideScreen
 import ua.nure.rideshare.ui.screens.search.SearchScreen
 import ua.nure.rideshare.ui.viewmodels.AuthViewModel
 import ua.nure.rideshare.ui.viewmodels.LocationViewModel
+import ua.nure.rideshare.ui.viewmodels.RideViewModel
+import ua.nure.rideshare.ui.viewmodels.SearchViewModel
 
 /**
  * Sealed class defining all navigation routes in the app
@@ -61,6 +73,14 @@ sealed class Screen(val route: String) {
         }
     }
 
+    object BookRideRequest : Screen("book_request/{tripId}") {
+        fun createRoute(tripId: String): String {
+            return "book_request/$tripId"
+        }
+    }
+
+    object BookingManagement : Screen("booking_management")
+
     /**
      * Ride details screen
      * Shows information about a specific ride
@@ -74,11 +94,7 @@ sealed class Screen(val route: String) {
     /**
      * Booking screen for a specific ride
      */
-    object BookRide : Screen("book/{rideId}") {
-        fun createRoute(rideId: String): String {
-            return "book/$rideId"
-        }
-    }
+
 
     /**
      * Ride creation screen for drivers
@@ -182,6 +198,9 @@ fun RideShareNavHost(
                 onNavigateToChats = {
                     navController.navigate(Screen.Chats.route)
                 },
+                onNavigateToBookingManagement = {
+                    navController.navigate(Screen.BookingManagement.route)
+                },
                 onNavigateToYourRides = {
                     navController.navigate(Screen.YourRides.route)
                 },
@@ -232,24 +251,12 @@ fun RideShareNavHost(
             RideDetailsScreen(
                 rideId = rideId,
                 onBackClick = { navController.popBackStack() },
-                onBookClick = { navController.navigate(Screen.BookRide.createRoute(rideId)) }
-            )
-        }
-
-        composable(
-            route = Screen.BookRide.route,
-            arguments = listOf(
-                navArgument("rideId") {
-                    type = NavType.StringType
+                onBookClick = {
+                    // For now, navigate to the existing BookRide route
+                    // Later you can change this to BookRideRequest when you implement it
+                    navController.navigate(Screen.BookRideRequest.createRoute(rideId))
                 }
             )
-        ) { backStackEntry ->
-            val rideId = backStackEntry.arguments?.getString("rideId") ?: ""
-
-            // Placeholder for BookRideScreen - will be implemented later
-            Surface(modifier = Modifier.fillMaxSize()) {
-                Text("Book Ride Screen - Coming Soon")
-            }
         }
 
         composable(
@@ -304,6 +311,7 @@ fun RideShareNavHost(
                             popUpTo(navController.graph.id) { inclusive = true }
                         }
                     }
+                    // viewModel parameter has default value hiltViewModel(), so no need to pass it explicitly
                 )
             } ?: run {
                 // If userId is null, navigate back to login
@@ -388,10 +396,129 @@ fun RideShareNavHost(
                     },
                     onRideDetails = { rideId ->
                         navController.navigate(Screen.RideDetails.createRoute(rideId))
+                    },
+                    onNavigateToBookingManagement = {
+                        navController.navigate(Screen.BookingManagement.route)
                     }
                 )
             } ?: run {
                 // If userId is null, navigate back to login
+                LaunchedEffect(Unit) {
+                    navController.navigate(Screen.Login.route) {
+                        popUpTo(navController.graph.id) { inclusive = true }
+                    }
+                }
+            }
+        }
+
+        composable(
+            route = Screen.RideDetails.route,
+            arguments = listOf(
+                navArgument("rideId") {
+                    type = NavType.StringType
+                }
+            )
+        ) { backStackEntry ->
+            val rideId = backStackEntry.arguments?.getString("rideId") ?: ""
+
+            RideDetailsScreen(
+                rideId = rideId,
+                onBackClick = { navController.popBackStack() },
+                onBookClick = {
+                    // Navigate to booking request screen with trip data
+                    navController.navigate(Screen.BookRideRequest.createRoute(rideId))
+                }
+            )
+        }
+
+// Add the new BookingRequestScreen composable
+        composable(
+            route = Screen.BookRideRequest.route,
+            arguments = listOf(
+                navArgument("tripId") {
+                    type = NavType.StringType
+                }
+            )
+        ) { backStackEntry ->
+            val tripId = backStackEntry.arguments?.getString("tripId") ?: ""
+
+            currentUserId?.let { userId ->
+                // We need to load trip data here since we're not passing it through navigation
+                val rideViewModel: RideViewModel = hiltViewModel()
+                val searchViewModel: SearchViewModel = hiltViewModel()
+
+                var trip by remember { mutableStateOf<Trip?>(null) }
+                var route by remember { mutableStateOf<Route?>(null) }
+                var driverProfile by remember { mutableStateOf<Profile?>(null) }
+                var car by remember { mutableStateOf<Car?>(null) }
+                var isLoading by remember { mutableStateOf(true) }
+
+                LaunchedEffect(tripId) {
+                    try {
+                        val (tripData, routeData) = rideViewModel.getTripWithRoute(tripId)
+                        trip = tripData
+                        route = routeData
+
+                        // Load additional data
+                        searchViewModel.loadPopularTrips()
+                        searchViewModel.searchResults.collect { results ->
+                            val matchingResult = results.find { it.trip.tripId == tripId }
+                            if (matchingResult != null) {
+                                driverProfile = matchingResult.driverProfile
+                                car = matchingResult.car
+                                isLoading = false
+                                return@collect
+                            }
+                        }
+                    } catch (e: Exception) {
+                        isLoading = false
+                    }
+                }
+
+                if (isLoading) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = Color(0xFF00A16B))
+                    }
+                } else {
+                    BookingRequestScreen(
+                        tripId = tripId,
+                        userId = userId,
+                        trip = trip,
+                        route = route,
+                        driverProfile = driverProfile,
+                        car = car,
+                        onBackClick = { navController.popBackStack() },
+                        onBookingCreated = {
+                            navController.navigate(Screen.BookingManagement.route) {
+                                popUpTo(Screen.BookRideRequest.route) { inclusive = true }
+                            }
+                        },
+                        locationViewModel = locationViewModel
+                    )
+                }
+            } ?: run {
+                LaunchedEffect(Unit) {
+                    navController.navigate(Screen.Login.route) {
+                        popUpTo(navController.graph.id) { inclusive = true }
+                    }
+                }
+            }
+        }
+
+// Add BookingManagement screen
+        composable(Screen.BookingManagement.route) {
+            currentUserId?.let { userId ->
+                BookingManagementScreen(
+                    userId = userId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToTripDetails = { tripId ->
+                        navController.navigate(Screen.RideDetails.createRoute(tripId))
+                    }
+                )
+            } ?: run {
                 LaunchedEffect(Unit) {
                     navController.navigate(Screen.Login.route) {
                         popUpTo(navController.graph.id) { inclusive = true }

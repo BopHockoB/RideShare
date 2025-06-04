@@ -80,6 +80,7 @@ fun ProfileScreen(
     onNavigateToHome: () -> Unit,
     onNavigateToUserCars: () -> Unit,
     onNavigateToUserRides: () -> Unit,
+//    onNavigateToBookingManagement: () -> Unit,
     onLogout: () -> Unit,
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
@@ -219,6 +220,13 @@ fun ProfileScreen(
                                 onClick = onNavigateToUserRides,
                                 modifier = Modifier.padding(bottom = 12.dp)
                             )
+
+//                            ProfileMenuButton(
+//                                text = "Booking Requests",
+//                                icon = Icons.Default.RequestPage,
+//                                onClick = onNavigateToBookingManagement,
+//                                modifier = Modifier.padding(bottom = 12.dp)
+//                            )
 
                             // Settings
                             ProfileMenuButton(

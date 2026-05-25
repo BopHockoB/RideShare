@@ -18,6 +18,7 @@
 </p>
 
 ---
+[Watch Video](https://youtube.com/shorts/wMK6mbMCCUo)
 
 ## The Strategic "Why" (Overview)
 

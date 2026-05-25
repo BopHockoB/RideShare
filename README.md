@@ -5,7 +5,7 @@
     <a href="https://github.com/BopHockoB/RideShare/actions">
       <img alt="Build Status" src="https://img.shields.io/badge/Build-Passing-brightgreen" />
     </a>
-    <a href="https://github.com/BopHockoB/RideShare/blob/main/LICENSE">
+    <a href="https://github.com/BopHockoB/RideShare/blob/master/LICENSE">
       <img alt="License" src="https://img.shields.io/badge/License-MIT-blue.svg" />
     </a>
     <a href="https://github.com/BopHockoB/RideShare/pulls">
